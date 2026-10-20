@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/poojabhather99/data-quality-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/poojabhather99/data-quality-agent/actions/workflows/ci.yml)
 
+**Live demo (runs in your browser):** https://poojabhather99.github.io/data-quality-agent/
+
 Profile a table, have an LLM (or an offline heuristic) propose validation rules, and run them safely.
 
 The main design point: **the model never produces executable code.** It proposes rules as JSON specs (`not_null`, `unique`, `range`, `allowed_values`, `regex`). Every spec is validated against a fixed schema and the table's real column names before it can run. Unknown kinds, unknown columns, bad regexes, inverted ranges and non-numeric bounds are rejected and reported instead of executed.

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Quality Agent demo</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Profile a table, propose validation rules, and check them. Paste a model's rule suggestions to see which are accepted and which are rejected before anything runs.">
+<style>
+:root{--bg:#fafaf8;--fg:#1c1c1a;--mut:#6b6b66;--card:#fff;--line:#e3e2dc;--acc:#1f6f5c;--accfg:#fff;--bad:#a8321f;--ok:#1f6f5c;--code:#f2f1ec}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe5;--mut:#a09f98;--card:#1d1d1b;--line:#33332f;--acc:#4cb89d;--accfg:#10201b;--bad:#ef8a75;--ok:#4cb89d;--code:#242421}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:860px;margin:0 auto;padding:28px 16px 64px}
+h1{font-size:1.7rem;margin:0 0 6px}
+h2{font-size:1.05rem;margin:28px 0 10px}
+p.lead{color:var(--mut);margin:0 0 14px}
+a{color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:12px 0}
+label{display:block;font-size:.85rem;color:var(--mut);margin:10px 0 4px}
+input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit}
+textarea{min-height:110px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem}
+button{background:var(--acc);color:var(--accfg);border:0;border-radius:8px;padding:9px 14px;font:inherit;font-weight:600;cursor:pointer;margin:8px 8px 0 0}
+button.alt{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+button:disabled{opacity:.5;cursor:wait}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1 1 180px}
+pre{background:var(--code);padding:10px 12px;border-radius:8px;overflow:auto;font-size:.82rem;white-space:pre-wrap;word-break:break-word;margin:6px 0}
+table{border-collapse:collapse;width:100%;font-size:.88rem}th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left}
+.tag{margin-left:8px;display:inline-block;padding:1px 8px;border-radius:99px;font-size:.78rem;border:1px solid var(--line)}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.mut{color:var(--mut)}
+#status{font-size:.9rem;color:var(--mut);margin:8px 0}
+.bubble{padding:8px 12px;border-radius:12px;margin:6px 0;max-width:92%;white-space:pre-wrap;border:1px solid var(--line)}
+.me{margin-left:auto;background:var(--acc);color:var(--accfg);border-color:var(--acc)}
+footer{margin-top:36px;color:var(--mut);font-size:.88rem}
+</style>
+</head>
+<body>
+<main>
+<h1>Data quality rule agent</h1>
+<p class="lead">Profile a table, propose validation rules, and check them. Paste a model's rule suggestions to see which are accepted and which are rejected before anything runs.</p>
+<p class="mut" style="font-size:.9rem">This page runs the project's actual Python source in your browser (via Pyodide). Nothing is sent to a server. <a href="https://github.com/poojabhather99/data-quality-agent">View the code on GitHub</a>.</p>
+<div id="status">Loading Python (first visit can take 10 to 20 seconds)...</div>
+<div id="app" hidden>
+
+<h2>1. Synthetic demo: rules learned from clean data, applied to a corrupted copy</h2>
+<div class="card"><button id="demo">Run demo</button><div id="demoout"></div></div>
+<h2>2. Paste a model's rule suggestions</h2>
+<div class="card">
+<p class="mut">Rules are JSON specs, never code. Each is validated against a fixed schema and the table's real columns. The table here has columns record_id, worker_id, age, status.</p>
+<textarea id="reply"></textarea><button id="val">Validate</button><div id="valout"></div></div>
+<h2>3. Your own CSV</h2>
+<div class="card"><textarea id="csv" placeholder="Paste CSV text with a header row"></textarea><button id="mycsv">Profile and propose rules</button><div id="csvout"></div></div>
+
+</div>
+<footer>Rules in the demo come from the offline heuristic proposer; no language model is called from this page. In section 2 you play the model: edit the JSON and see what the validator lets through.</footer>
+</main>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script>
+const FILES = ["src/dqagent/__init__.py", "src/dqagent/profile.py", "src/dqagent/rules.py", "src/dqagent/proposer.py", "src/dqagent/synth.py", "src/dqagent/evaluate.py"];
+const PACKAGES = ["pandas"];
+const PY = String.raw`
+import io, json
+import pandas as pd
+from dqagent.synth import clean_table, inject_defects
+from dqagent.proposer import propose
+from dqagent.rules import check
+from dqagent.profile import profile_table
+def _j(x):
+    return json.dumps(x, default=str)
+def demo():
+    clean = clean_table()
+    bad, groups = inject_defects(clean)
+    rules, rej = propose(clean)
+    return _j({"rules": len(rules), "on_clean": check(clean, rules), "on_bad": check(bad, rules),
+               "injected": {k: len(v) for k, v in groups.items()}, "rejected": rej})
+def validate(reply):
+    clean = clean_table()
+    bad, _ = inject_defects(clean)
+    rules, rej = propose(clean, lambda _p: reply)
+    return _j({"accepted": check(bad, rules), "rejected": rej})
+def from_csv(text):
+    df = pd.read_csv(io.StringIO(text))
+    rules, rej = propose(df)
+    return _j({"rows": len(df), "profile": profile_table(df), "checks": check(df, rules), "rejected": rej})
+`;
+const $ = (id) => document.getElementById(id);
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
+let py;
+async function boot() {
+  try {
+    py = await loadPyodide();
+    if (PACKAGES.length) { $('status').textContent = 'Loading ' + PACKAGES.join(', ') + '...'; await py.loadPackage(PACKAGES); }
+    const base = new URL('.', location.href).href;
+    for (const f of FILES) {
+      const r = await fetch(base + f);
+      if (!r.ok) throw new Error('could not load ' + f + ' (' + r.status + ')');
+      py.FS.mkdirTree('/app/' + f.split('/').slice(0, -1).join('/'));
+      py.FS.writeFile('/app/' + f, await r.text());
+    }
+    py.runPython("import sys; sys.path.insert(0, '/app/src')");
+    py.runPython(PY);
+    $('status').remove(); $('app').hidden = false;
+    init();
+  } catch (e) { $('status').textContent = 'Could not start the demo: ' + e.message; $('status').className = 'bad'; }
+}
+const call = (fn, ...args) => JSON.parse(py.globals.get(fn)(...args));
+
+function table(rows, cols) {
+  const t = el('table'); const h = el('tr'); cols.forEach((k) => h.append(el('th', k))); t.append(h);
+  rows.forEach((r) => { const tr = el('tr'); cols.forEach((k) => tr.append(el('td', String(r[k])))); t.append(tr); });
+  return t;
+}
+function init() {
+  $('reply').value = JSON.stringify([
+    {kind: 'not_null', column: 'worker_id'},
+    {kind: 'range', column: 'age', min: 18, max: 65},
+    {kind: 'allowed_values', column: 'status', values: ['active', 'inactive', 'leave']},
+    {kind: 'drop_table', column: 'age'},
+    {kind: 'not_null', column: 'ssn'},
+    {kind: 'regex', column: 'status', pattern: '('}
+  ], null, 2);
+  $('demo').onclick = () => {
+    const r = call('demo'); const o = $('demoout'); o.replaceChildren();
+    o.append(el('p', 'Injected defects: ' + JSON.stringify(r.injected) + '. Rules proposed from the clean table: ' + r.rules + '.'));
+    o.append(el('strong', 'Violations on the clean table (should be 0)'), table(r.on_clean, ['rule', 'violations', 'rate']));
+    o.append(el('strong', 'Violations on the corrupted copy'), table(r.on_bad, ['rule', 'violations', 'rate']));
+  };
+  $('val').onclick = () => {
+    const o = $('valout'); o.replaceChildren();
+    let r; try { r = call('validate', $('reply').value); } catch (e) { o.append(el('p', 'Error: ' + e.message, 'bad')); return; }
+    o.append(el('strong', 'Accepted rules, checked against the corrupted table'), table(r.accepted, ['rule', 'violations', 'rate']));
+    if (r.rejected.length) { o.append(el('strong', 'Rejected (never executed)')); r.rejected.forEach((m) => o.append(el('pre', m))); }
+  };
+  $('mycsv').onclick = () => {
+    const o = $('csvout'); o.replaceChildren();
+    try {
+      const r = call('from_csv', $('csv').value);
+      o.append(el('p', r.rows + ' rows'), el('strong', 'Rules proposed and violations in your data'), table(r.checks, ['rule', 'violations', 'rate']));
+    } catch (e) { o.append(el('p', 'Could not read that CSV: ' + e.message.split('\n').slice(-2).join(' '), 'bad')); }
+  };
+  $('demo').click(); $('val').click();
+}
+
+boot();
+</script>
+</body>
+</html>
